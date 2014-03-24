@@ -1,6 +1,7 @@
 # Intallation
 grub
 gummiboot
+prebootloader
 os-prober
 efibootmgr
 haveged
@@ -38,6 +39,7 @@ dnsutils
 netctl
 wget
 linux-firmware
+intel-ucode
 
 # Filesystems
 
