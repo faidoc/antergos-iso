@@ -62,12 +62,12 @@ make_boot_extra() {
 # Prepare /${install_dir}/boot/syslinux
 make_syslinux() {
     mkdir -p ${work_dir}/iso/${install_dir}/boot/syslinux
-    for _cfg in ${script_path}/syslinux/*.cfg; do
+    for _cfg in ${script_path}/isolinux/*.cfg; do
         sed "s|%ARCHISO_LABEL%|${iso_label}|g;
-             s|%INSTALL_DIR%|${install_dir}|g"
-             "s|%ARCH%|${arch}|g" ${_cfg} > ${work_dir}/iso/${install_dir}/boot/syslinux/${_cfg##*/}
+             s|%INSTALL_DIR%|${install_dir}|g;
+             s|%ARCH%|${arch}|g" ${_cfg} > ${work_dir}/iso/${install_dir}/boot/syslinux/${_cfg##*/}
     done
-    cp -Lr isolinux ${work_dir}/iso
+    cp -Lr isolinux ${work_dir}/iso/${install_dir}/boot/syslinux
     cp ${work_dir}/root-image/usr/lib/syslinux/bios/*.c32 ${work_dir}/iso/${install_dir}/boot/syslinux
     cp ${work_dir}/root-image/usr/lib/syslinux/bios/lpxelinux.0 ${work_dir}/iso/${install_dir}/boot/syslinux
     cp ${work_dir}/root-image/usr/lib/syslinux/bios/memdisk ${work_dir}/iso/${install_dir}/boot/syslinux
@@ -80,12 +80,15 @@ make_syslinux() {
 make_isolinux() {
     if [[ ! -e ${work_dir}/build.${FUNCNAME} ]]; then
         mkdir -p ${work_dir}/iso/isolinux
+        cp -Lr isolinux ${work_dir}/iso
+        cp -R ${work_dir}/root-image/usr/lib/syslinux/bios/* ${work_dir}/iso/isolinux/
+        cp ${work_dir}/root-image/usr/lib/syslinux/bios/*.c32 ${work_dir}/iso/isolinux/
         sed "s|%ARCHISO_LABEL%|${iso_label}|g;
-             s|%INSTALL_DIR%|${install_dir}|g"
-             "s|%ARCH%|${arch}|g" ${script_path}/isolinux/isolinux.cfg > ${work_dir}/iso/isolinux/isolinux.cfg
+             s|%INSTALL_DIR%|${install_dir}|g;
+             s|%ARCH%|${arch}|g" ${script_path}/isolinux/isolinux.cfg > ${work_dir}/iso/isolinux/isolinux.cfg
         cp ${work_dir}/root-image/usr/lib/syslinux/bios/isolinux.bin ${work_dir}/iso/isolinux/
         cp ${work_dir}/root-image/usr/lib/syslinux/bios/isohdpfx.bin ${work_dir}/iso/isolinux/
-        cp ${work_dir}/root-image/usr/lib/syslinux/bios/ldlinux.c32 ${work_dir}/iso/isolinux/
+        cp ${work_dir}/root-image/usr/lib/syslinux/bios/lpxelinux.0 ${work_dir}/iso/isolinux/
 
         : > ${work_dir}/build.${FUNCNAME}
     fi
@@ -177,20 +180,31 @@ make_customize_root_image() {
 
         # Download opendesktop-fonts
         wget --content-disposition -P ${work_dir}/root-image/arch/pkg 'https://www.archlinux.org/packages/community/any/opendesktop-fonts/download/'
-
-        mkarchiso ${verbose} -w "${work_dir}" -C "${pacman_conf}" -D "${install_dir}" \
-            -r '/usr/bin/locale-gen' \
-            run
+        
+		if [[ ! -e /tmp/locale_generated ]]; then
+            mkarchiso ${verbose} -w "${work_dir}" -C "${pacman_conf}" -D "${install_dir}" \
+                -r '/usr/bin/locale-gen' \
+                run && touch /tmp/locale_generated
+        else
+            echo "Locale was previously generated. Skipping..."
+        fi
 
         #sed -i 's|^root:|root:liLfqaUhrN8Hs|g' ${work_dir}/root-image/etc/shadow
         
-        mkarchiso ${verbose} -w "${work_dir}" -C "${pacman_conf}" -D "${install_dir}" \
-            -r 'groupadd -r autologin' \
-            run
-
-        mkarchiso ${verbose} -w "${work_dir}" -C "${pacman_conf}" -D "${install_dir}" \
-            -r 'useradd -m -g users -G "audio,disk,optical,wheel,network,autologin" antergos' \
-            run
+        if [[ ! -e /tmp/group_added ]]; then
+            mkarchiso ${verbose} -w "${work_dir}" -C "${pacman_conf}" -D "${install_dir}" \
+                -r 'groupadd -r autologin' \
+                run && touch /tmp/group_added
+        else
+            echo "Group exists. Skipping..."
+        fi
+        if [[ ! -e /tmp/user_added ]]; then
+            mkarchiso ${verbose} -w "${work_dir}" -C "${pacman_conf}" -D "${install_dir}" \
+                -r 'useradd -m -g users -G "audio,disk,optical,wheel,network,autologin" antergos' \
+                run && touch /tmp/user_added
+        else
+            echo "User exists. Skipping..."
+        fi
 
         # Configuring pacman
         cp -f ${script_path}/pacman.conf.i686 ${work_dir}/root-image/etc/pacman.conf
@@ -236,7 +250,7 @@ make_customize_root_image() {
             run
             
         rm ${work_dir}/root-image/usr/bin/set-gsettings
-        umount -lf ${work_dir}/root-image/var/run/dbus
+        umount -lf ${work_dir}/root-image/var/run/dbus || true
         
         # Black list floppy
         echo "blacklist floppy" > ${work_dir}/root-image/etc/modprobe.d/nofloppy.conf
@@ -303,19 +317,28 @@ clean_single ()
     rm -f ${out_dir}/${iso_name}-${iso_version}-*-${arch}.iso
 }
 
+# Helper function to run make_*() only one time per architecture.
+run_once() {
+    if [[ ! -e ${work_dir}/build.${1}_${arch} ]]; then
+        $1
+        touch ${work_dir}/build.${1}_${arch}
+    fi
+}
+
 make_common_single() {
-    make_basefs
-    make_packages
-    make_setup_mkinitcpio
+    run_once make_basefs
+    run_once make_packages
+    run_once make_setup_mkinitcpio
+    run_once make_customize_root_image
     make_boot
     make_boot_extra
+    run_once make_syslinux
     make_isolinux
     make_efi
     make_efiboot
     make_aitab
-    make_customize_root_image
-    make_usr_lib_modules
-    make_usr_share
+    #make_usr_lib_modules
+    #make_usr_share
     make_prepare
     make_iso
 }
